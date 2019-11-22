@@ -6,20 +6,21 @@ import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.security.Security;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+
 
 /**
  * Hello world!
  */
 public class App {
-
+    BouncyCastleProvider bouncyCastleProvider;
     String hostname;
     String username;
     String password;
