@@ -107,7 +107,7 @@ public class App {
             while ((len = zis.read(buffer)) > 0) {
                 fos.write(buffer, 0, len);
             }
-            System.out.println(zipEntry.getName());
+            System.out.println("Zip entry: " + zipEntry.getName());
             fos.close();
             uploadFTP(newFile.getCanonicalPath(), zipEntry.getName());
             zipEntry = zis.getNextEntry();
@@ -120,9 +120,6 @@ public class App {
         throws IOException {
         SSHClient sshClient = setupSshj();
         SFTPClient sftpClient = sshClient.newSFTPClient();
-
-        List<RemoteResourceInfo> ls = sftpClient.ls("/Users/alde/Downloads");
-        //ls.stream().forEach((res) -> System.out.println(res.getName()));
         sftpClient.get(fileToDownload, localTargetPath + fileName);
 
         sftpClient.close();
