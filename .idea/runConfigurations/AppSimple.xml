@@ -1,0 +1,21 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="App Simple Test" type="Application" factoryName="Application">
+    <option name="ALTERNATIVE_JRE_PATH" value="/Library/Java/JavaVirtualMachines/jdk1.8.0_121.jdk/Contents/Home" />
+    <option name="ALTERNATIVE_JRE_PATH_ENABLED" value="true" />
+    <option name="MAIN_CLASS_NAME" value="as.App" />
+    <module name="simplefiletransfer" />
+    <option name="VM_PARAMETERS" value="-DhostnameTarget=181.55.123.197 -DpasswordTarget=@Simple -DusernameTarget=ftpsimple -DhostnameSource=localhost -DpasswordSource=alde1234 -DusernameSource=alde -DfullPathToDownload=$USER_HOME$/Downloads/89_CCF57_201911_S_N_I_2962853.zip -DlocalTargetPath=/tmp/ -DremoteTargetPath=$USER_HOME$/Documents/work/alianzap/ -DlocalFileName=89_CCF57_201911_S_N_I_2962853.zip" />
+    <extension name="coverage">
+      <pattern>
+        <option name="PATTERN" value="as.*" />
+        <option name="ENABLED" value="true" />
+      </pattern>
+    </extension>
+    <RunnerSettings RunnerId="JProfiler">
+      <option name="WINDOW" value="false" />
+    </RunnerSettings>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

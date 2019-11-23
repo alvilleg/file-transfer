@@ -4,13 +4,12 @@ import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.sftp.RemoteResourceInfo;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.net.ftp.FTPClient;
+import org.apache.commons.net.ftp.FTPReply;
 
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -20,25 +19,39 @@ import java.util.zip.ZipInputStream;
  * Hello world!
  */
 public class App {
-    BouncyCastleProvider bouncyCastleProvider;
-    String hostname;
-    String username;
-    String password;
+    String hostnameSource;
+    String hostnameTarget;
+    String usernameTarget;
+    String passwordTarget;
+    String usernameSource;
+    String passwordSource;
     String fullPathToDownload;
     String localTargetPath;
     String remoteTargetPath;
     String localFileName;
 
-    public void setHostname(String hostname) {
-        this.hostname = hostname;
+    public void setHostnameSource(String hostnameSource) {
+        this.hostnameSource = hostnameSource;
     }
 
-    public void setUsername(String username) {
-        this.username = username;
+    public void setHostnameTarget(String hostnameTarget) {
+        this.hostnameTarget = hostnameTarget;
     }
 
-    public void setPassword(String password) {
-        this.password = password;
+    public void setUsernameTarget(String usernameTarget) {
+        this.usernameTarget = usernameTarget;
+    }
+
+    public void setPasswordTarget(String passwordTarget) {
+        this.passwordTarget = passwordTarget;
+    }
+
+    public void setUsernameSource(String usernameSource) {
+        this.usernameSource = usernameSource;
+    }
+
+    public void setPasswordSource(String passwordSource) {
+        this.passwordSource = passwordSource;
     }
 
     public void setFullPathToDownload(String fullPathToDownload) {
@@ -57,12 +70,18 @@ public class App {
         this.localFileName = localFileName;
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
 
         App app = new App();
-        app.setHostname(System.getProperty("hostname"));
-        app.setPassword(System.getProperty("password"));
-        app.setUsername(System.getProperty("username"));
+        app.setHostnameTarget(System.getProperty("hostnameTarget"));
+        app.setHostnameSource(System.getProperty("hostnameSource"));
+        //
+        app.setPasswordTarget(System.getProperty("passwordTarget"));
+        app.setPasswordSource(System.getProperty("passwordSource"));
+        //
+        app.setUsernameTarget(System.getProperty("usernameTarget"));
+        app.setUsernameSource(System.getProperty("usernameSource"));
+        //
         app.setFullPathToDownload(System.getProperty("fullPathToDownload"));
         app.setLocalTargetPath(System.getProperty("localTargetPath"));
         app.setRemoteTargetPath(System.getProperty("remoteTargetPath"));
@@ -74,7 +93,7 @@ public class App {
         System.exit(0);
     }
 
-    public void unzip(String zipFilePath) throws IOException {
+    public void unzip(String zipFilePath) throws Exception {
         String fileZip = zipFilePath;
         File destDir = new File(localTargetPath);
         byte[] buffer = new byte[1024];
@@ -90,7 +109,7 @@ public class App {
             }
             System.out.println(zipEntry.getName());
             fos.close();
-            upload(newFile.getCanonicalPath(), zipEntry.getName());
+            uploadFTP(newFile.getCanonicalPath(), zipEntry.getName());
             zipEntry = zis.getNextEntry();
         }
         zis.closeEntry();
@@ -104,7 +123,7 @@ public class App {
 
         List<RemoteResourceInfo> ls = sftpClient.ls("/Users/alde/Downloads");
         //ls.stream().forEach((res) -> System.out.println(res.getName()));
-        //sftpClient.get(fileToDownload, localTargetPath + fileName);
+        sftpClient.get(fileToDownload, localTargetPath + fileName);
 
         sftpClient.close();
         sshClient.disconnect();
@@ -121,11 +140,40 @@ public class App {
         sshClient.disconnect();
     }
 
+    public void uploadFTP(String fullFilePath, String fileName)
+        throws Exception {
+        FTPClient ftp = new FTPClient();
+        ftp.connect(hostnameTarget, 21);
+        int reply = ftp.getReplyCode();
+        System.out.println("Reply ::: " + reply);
+        if (!FTPReply.isPositiveCompletion(reply)) {
+            ftp.disconnect();
+            throw new Exception("Exception in connecting to FTP Server");
+        }
+        boolean logged = ftp.login(usernameTarget, passwordTarget);
+        if (!logged) {
+            throw new Exception("Couldn't log ");
+        }
+        ftp.enterLocalPassiveMode();
+        ftp.setFileType(FTPClient.BINARY_FILE_TYPE);
+        File file = new File(fullFilePath);
+        InputStream in = new FileInputStream(file);
+        OutputStream outputStream = ftp.storeFileStream(file.getName());
+        System.out.println("Sending: ..." + file.getName());
+        IOUtils.copy(in, outputStream);
+        IOUtils.closeQuietly(in);
+        IOUtils.closeQuietly(outputStream);
+
+        ftp.logout();
+        ftp.disconnect();
+        System.out.println("Finished " + fullFilePath);
+    }
+
     private SSHClient setupSshj() throws IOException {
         SSHClient client = new SSHClient();
         client.addHostKeyVerifier(new PromiscuousVerifier());
-        client.connect(hostname);
-        client.authPassword(username, password);
+        client.connect(hostnameSource);
+        client.authPassword(usernameSource, passwordSource);
         return client;
     }
 }
