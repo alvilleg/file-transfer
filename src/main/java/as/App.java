@@ -10,6 +10,7 @@ import org.apache.commons.net.ftp.FTPReply;
 
 
 import java.io.*;
+import java.sql.*;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -29,6 +30,7 @@ public class App {
     String localTargetPath;
     String remoteTargetPath;
     String localFileName;
+    String dbControlName;
 
     public void setHostnameSource(String hostnameSource) {
         this.hostnameSource = hostnameSource;
@@ -70,6 +72,10 @@ public class App {
         this.localFileName = localFileName;
     }
 
+    public void setDbControlName(String dbControlName) {
+        this.dbControlName = dbControlName;
+    }
+
     public static void main(String[] args) throws Exception {
 
         App app = new App();
@@ -86,7 +92,8 @@ public class App {
         app.setLocalTargetPath(System.getProperty("localTargetPath"));
         app.setRemoteTargetPath(System.getProperty("remoteTargetPath"));
         app.setLocalFileName(System.getProperty("localFileName"));
-
+        app.setDbControlName(System.getProperty("dbControlName"));
+        app.createDB();
         try {
             app.downloadFile(app.fullPathToDownload, app.localFileName);
         } catch (Exception exc) {
@@ -97,7 +104,59 @@ public class App {
         System.exit(0);
     }
 
-    public void unzip(String zipFilePath) throws Exception {
+    private void closeDbConn(Connection connection) {
+
+        try {
+            if (connection != null) {
+                connection.close();
+            }
+        } catch (SQLException ex) {
+            System.out.println(ex.getMessage());
+        }
+
+    }
+
+    public Connection connect() {
+        Connection conn = null;
+        try {
+            // db parameters
+            String url = "jdbc:sqlite:file_transfer_" + dbControlName + ".db";
+            // create a connection to the database
+            conn = DriverManager.getConnection(url);
+            conn.setAutoCommit(true);
+            System.out.println("Connection to SQLite has been established.");
+
+        } catch (SQLException e) {
+            System.out.println(e.getMessage());
+        }
+        return conn;
+    }
+
+    private void createDB() throws SQLException {
+        Connection connection = connect();
+        Statement statement = connection.createStatement();
+        statement.execute("Create table if not exists files_to_process(file_name text primary key)");
+        statement.execute("Create table if not exists processed_files(file_name text primary key)");
+        closeDbConn(connection);
+    }
+
+    public void insertFileToProcess(String fileName) throws SQLException {
+        Connection connection = connect();
+        PreparedStatement pstmt = connection.prepareStatement("Insert into files_to_process(file_name ) values (?)");
+        pstmt.setString(1, fileName);
+        pstmt.executeUpdate();
+        closeDbConn(connection);
+    }
+
+    public void insertProcessedFile(String fileName) throws SQLException {
+        Connection connection = connect();
+        PreparedStatement pstmt = connection.prepareStatement("Insert into processed_files(file_name) values (?)");
+        pstmt.setString(1, fileName);
+        pstmt.executeUpdate();
+        closeDbConn(connection);
+    }
+
+    public void unzip(String zipFilePath) throws IOException {
         String fileZip = zipFilePath;
         File destDir = new File(localTargetPath);
         destDir.mkdirs();
@@ -140,13 +199,22 @@ public class App {
                     exc.printStackTrace();
                 }
             }
-            Thread.sleep(1000);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
             filePathsByType.remove(s);
         }
 
         for (Map.Entry<String, List<String>> missing : filePathsByType.entrySet()) {
             for (String filePath : missing.getValue()) {
-                uploadFTP(filePath);
+                try {
+                    uploadFTP(filePath);
+                } catch (Exception e) {
+                    System.out.println("Fail uploading ... " + filePath);
+                    e.printStackTrace();
+                }
             }
         }
 
@@ -158,6 +226,16 @@ public class App {
         SSHClient sshClient = setupSshj();
         SFTPClient sftpClient = sshClient.newSFTPClient();
         List<RemoteResourceInfo> remoteResourceInfos = sftpClient.ls(fileToDownload);
+
+        remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
+            try {
+                insertFileToProcess(rsi.getName());
+            } catch (SQLException e) {
+                System.out.println("Error inserting file name");
+                e.printStackTrace();
+            }
+        });
+
         remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
             System.out.println("Downloading..." + rsi.getPath());
 
@@ -165,7 +243,7 @@ public class App {
                 sftpClient.get(rsi.getPath(), localTargetPath + rsi.getName());
 
                 unzip(localTargetPath + rsi.getName());
-
+                insertProcessedFile(rsi.getName());
             } catch (IOException e) {
                 System.out.println("Fail downloading: " + rsi.getPath());
                 e.printStackTrace();
