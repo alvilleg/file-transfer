@@ -229,7 +229,7 @@ public class App {
 
         remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
             try {
-                insertFileToProcess(rsi.getName());
+                insertFileToProcess(rsi.getPath());
             } catch (SQLException e) {
                 System.out.println("Error inserting file name");
                 e.printStackTrace();
@@ -243,7 +243,7 @@ public class App {
                 sftpClient.get(rsi.getPath(), localTargetPath + rsi.getName());
 
                 unzip(localTargetPath + rsi.getName());
-                insertProcessedFile(rsi.getName());
+                insertProcessedFile(rsi.getPath());
             } catch (IOException e) {
                 System.out.println("Fail downloading: " + rsi.getPath());
                 e.printStackTrace();
