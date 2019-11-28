@@ -5,6 +5,9 @@ import net.schmizz.sshj.sftp.RemoteResourceInfo;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.time.StopWatch;
+import org.apache.commons.net.PrintCommandListener;
+import org.apache.commons.net.ftp.FTP;
 import org.apache.commons.net.ftp.FTPClient;
 import org.apache.commons.net.ftp.FTPReply;
 
@@ -31,6 +34,7 @@ public class App {
     String remoteTargetPath;
     String localFileName;
     String dbControlName;
+    Map<String, String> failFiles = new HashMap<>();
 
     public void setHostnameSource(String hostnameSource) {
         this.hostnameSource = hostnameSource;
@@ -156,7 +160,7 @@ public class App {
         closeDbConn(connection);
     }
 
-    public void unzip(String zipFilePath) throws IOException {
+    public void unzip(String zipFilePath, FTPClient ftp, int count, long total) throws IOException {
         String fileZip = zipFilePath;
         File destDir = new File(localTargetPath);
         destDir.mkdirs();
@@ -166,19 +170,17 @@ public class App {
         List<String> order = Arrays.asList("I", "IR", "IP", "IPR", "AP", "APR", "UN", "UR", "A", "AR");
         Map<String, List<String>> filePathsByType = new LinkedHashMap<>();
         order.stream().forEach((s) -> filePathsByType.put(s, new ArrayList<>()));
-
+        StopWatch watch = new StopWatch();
+        watch.start();
+        int countEntries = 0;
         while (zipEntry != null) {
 
             File newFile = new File(destDir, zipEntry.getName());
-
-            System.out.println("Zip entry Name : " + zipEntry.getName());
-
             FileOutputStream fos = new FileOutputStream(newFile);
             int len;
             while ((len = zis.read(buffer)) > 0) {
                 fos.write(buffer, 0, len);
             }
-            System.out.println("Zip entry: " + zipEntry.getName());
             fos.close();
             zipEntry = zis.getNextEntry();
             String fileName = newFile.getName();
@@ -186,74 +188,109 @@ public class App {
             List<String> files = filePathsByType.get(priority);
             files.add(newFile.getCanonicalPath());
             filePathsByType.put(priority, files);
+            countEntries++;
         }
 
-
+        int countUploaded = 0;
         for (String s : order) {
             System.out.println("Sending priority type: " + s);
             for (String filePath : filePathsByType.get(s)) {
                 try {
-                    uploadFTP(filePath);
+                    uploadFTP(filePath, ftp);
+                    countUploaded++;
                 } catch (Exception exc) {
                     System.out.println("Fail uploading ... " + filePath);
                     exc.printStackTrace();
+                    failFiles.put(zipFilePath, filePath);
                 }
             }
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+
             filePathsByType.remove(s);
         }
 
         for (Map.Entry<String, List<String>> missing : filePathsByType.entrySet()) {
             for (String filePath : missing.getValue()) {
                 try {
-                    uploadFTP(filePath);
+                    uploadFTP(filePath, ftp);
+                    countUploaded++;
                 } catch (Exception e) {
                     System.out.println("Fail uploading ... " + filePath);
                     e.printStackTrace();
+                    failFiles.put(zipFilePath, filePath);
                 }
             }
         }
 
         zis.closeEntry();
         zis.close();
+        watch.stop();
+        System.err.println(count + "/" + total + "====>>> UNZIP Time Elapsed: [" + watch.getTime() + "ms] <<<==== " + countUploaded + "/" + countEntries + " files ");
+        failFiles.entrySet().stream().forEach(System.err::println);
     }
 
-    public void downloadFile(String fileToDownload, String fileName) throws IOException {
-        SSHClient sshClient = setupSshj();
-        SFTPClient sftpClient = sshClient.newSFTPClient();
-        List<RemoteResourceInfo> remoteResourceInfos = sftpClient.ls(fileToDownload);
+    public void downloadFile(String fileToDownload, String fileName) throws Exception {
+        //
+        final FTPClient ftp = new FTPClient();
+        ftp.setDataTimeout(5000);
+        ftp.setConnectTimeout(5000);
 
-        remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
-            try {
-                insertFileToProcess(rsi.getPath());
-            } catch (SQLException e) {
-                System.out.println("Error inserting file name");
-                e.printStackTrace();
+        final SSHClient sshClient = setupSshj();
+        final SFTPClient sftpClient = sshClient.newSFTPClient();
+        //ftp.addProtocolCommandListener(new PrintCommandListener(new PrintWriter(new OutputStreamWriter(System.err, "UTF-8")), true));
+        try {
+
+            ftp.connect(hostnameTarget, 21);
+            int reply = ftp.getReplyCode();
+            System.out.println("Reply ::: " + reply);
+            if (!FTPReply.isPositiveCompletion(reply)) {
+                ftp.disconnect();
+                throw new Exception("Exception in connecting to FTP Server");
             }
-        });
-
-        remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
-            System.out.println("Downloading..." + rsi.getPath());
-
-            try {
-                sftpClient.get(rsi.getPath(), localTargetPath + rsi.getName());
-
-                unzip(localTargetPath + rsi.getName());
-                insertProcessedFile(rsi.getPath());
-            } catch (IOException e) {
-                System.out.println("Fail downloading: " + rsi.getPath());
-                e.printStackTrace();
-            } catch (Exception e) {
-                System.out.println("Fail downloading: " + rsi.getPath());
-                e.printStackTrace();
+            boolean logged = ftp.login(usernameTarget, passwordTarget);
+            if (!logged) {
+                throw new Exception("Couldn't log ");
             }
-        });
-        sftpClient.close();
-        sshClient.disconnect();
+            ftp.enterLocalPassiveMode();
+            ftp.setFileType(FTPClient.ASCII_FILE_TYPE);
+            ftp.setFileTransferMode(FTP.COMPRESSED_TRANSFER_MODE);
+            //
+            List<RemoteResourceInfo> remoteResourceInfos = sftpClient.ls(fileToDownload);
+
+            /*remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
+                try {
+                    insertFileToProcess(rsi.getPath());
+                } catch (SQLException e) {
+                    System.out.println("Error inserting file name");
+                    e.printStackTrace();
+                }
+            });*/
+            int count[] = {0};
+            long total = remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).count();
+            remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
+                System.out.println("Downloading..." + rsi.getPath());
+
+                try {
+                    sftpClient.get(rsi.getPath(), localTargetPath + rsi.getName());
+
+                    unzip(localTargetPath + rsi.getName(), ftp, ++count[0], total);
+                    //insertProcessedFile(rsi.getPath());
+                } catch (IOException e) {
+                    System.out.println("Fail downloading: " + rsi.getPath());
+                    e.printStackTrace();
+                } catch (Exception e) {
+                    System.out.println("Fail downloading: " + rsi.getPath());
+                    e.printStackTrace();
+                }
+            });
+        } catch (Exception exc) {
+
+        } finally {
+            sftpClient.close();
+            sshClient.disconnect();
+            ftp.logout();
+            ftp.disconnect();
+        }
+
     }
 
     public void upload(String fullFilePath, String fileName) throws IOException {
@@ -266,35 +303,19 @@ public class App {
         sshClient.disconnect();
     }
 
-    public void uploadFTP(String fullFilePath) throws Exception {
-        System.out.println("Start uploading for " + fullFilePath);
-        FTPClient ftp = new FTPClient();
-        ftp.connect(hostnameTarget, 21);
-        int reply = ftp.getReplyCode();
-        System.out.println("Reply ::: " + reply);
-        if (!FTPReply.isPositiveCompletion(reply)) {
-            ftp.disconnect();
-            throw new Exception("Exception in connecting to FTP Server");
-        }
-        boolean logged = ftp.login(usernameTarget, passwordTarget);
-        if (!logged) {
-            throw new Exception("Couldn't log ");
-        }
+    public void uploadFTP(String fullFilePath, FTPClient ftp) throws Exception {
 
-        ftp.enterLocalPassiveMode();
-        ftp.setFileType(FTPClient.BINARY_FILE_TYPE);
+
         File file = new File(fullFilePath);
         InputStream in = new FileInputStream(file);
-        OutputStream outputStream = ftp.storeFileStream(remoteTargetPath + file.getName());
-        System.out.println("Sending: ... fullPath: " + fullFilePath + " Name: " + file.getName());
-        IOUtils.copy(in, outputStream);
-        IOUtils.closeQuietly(in);
-        IOUtils.closeQuietly(outputStream);
-
-        ftp.logout();
-        ftp.disconnect();
-        System.out.println("Success upload for: " + fullFilePath);
+        try {
+            ftp.storeFile(remoteTargetPath + file.getName(), in);
+            IOUtils.closeQuietly(in);
+        } catch (Exception exc) {
+            exc.printStackTrace();
+        }
     }
+
 
     private SSHClient setupSshj() throws IOException {
         SSHClient client = new SSHClient();
