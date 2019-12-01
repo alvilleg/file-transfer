@@ -1,22 +1,24 @@
 package as;
 
+import ch.qos.logback.core.ConsoleAppender;
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.sftp.RemoteResourceInfo;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.time.StopWatch;
-import org.apache.commons.net.PrintCommandListener;
 import org.apache.commons.net.ftp.FTP;
 import org.apache.commons.net.ftp.FTPClient;
 import org.apache.commons.net.ftp.FTPReply;
-
 
 import java.io.*;
 import java.sql.*;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+
+import org.slf4j.LoggerFactory;
+
 
 
 /**
@@ -35,6 +37,8 @@ public class App {
     String localFileName;
     String dbControlName;
     Map<String, String> failFiles = new HashMap<>();
+
+    private static org.slf4j.Logger logger = LoggerFactory.getLogger(App.class);
 
     public void setHostnameSource(String hostnameSource) {
         this.hostnameSource = hostnameSource;
@@ -79,9 +83,10 @@ public class App {
     public void setDbControlName(String dbControlName) {
         this.dbControlName = dbControlName;
     }
+    
 
     public static void main(String[] args) throws Exception {
-
+        logger.info("Start app execution");
         App app = new App();
         app.setHostnameTarget(System.getProperty("hostnameTarget"));
         app.setHostnameSource(System.getProperty("hostnameSource"));
@@ -101,10 +106,11 @@ public class App {
         try {
             app.downloadFile(app.fullPathToDownload, app.localFileName);
         } catch (Exception exc) {
-            System.out.println("Failure reading files from: " + app.fullPathToDownload);
-            exc.printStackTrace();
+            logger.debug("Failure reading files from: " + app.fullPathToDownload);
+            logger.error(null, exc);
         }
 
+        logger.info("End app execution");
         System.exit(0);
     }
 
@@ -115,7 +121,7 @@ public class App {
                 connection.close();
             }
         } catch (SQLException ex) {
-            System.out.println(ex.getMessage());
+            logger.debug(ex.getMessage());
         }
 
     }
@@ -128,10 +134,10 @@ public class App {
             // create a connection to the database
             conn = DriverManager.getConnection(url);
             conn.setAutoCommit(true);
-            System.out.println("Connection to SQLite has been established.");
+            logger.debug("Connection to SQLite has been established.");
 
         } catch (SQLException e) {
-            System.out.println(e.getMessage());
+            logger.debug(e.getMessage());
         }
         return conn;
     }
@@ -193,14 +199,14 @@ public class App {
 
         int countUploaded = 0;
         for (String s : order) {
-            System.out.println("Sending priority type: " + s);
+            logger.debug("Sending priority type: " + s);
             for (String filePath : filePathsByType.get(s)) {
                 try {
                     uploadFTP(filePath, ftp);
                     countUploaded++;
                 } catch (Exception exc) {
-                    System.out.println("Fail uploading ... " + filePath);
-                    exc.printStackTrace();
+                    logger.debug("Fail uploading ... " + filePath);
+                    logger.error(null, exc);
                     failFiles.put(zipFilePath, filePath);
                 }
             }
@@ -214,8 +220,8 @@ public class App {
                     uploadFTP(filePath, ftp);
                     countUploaded++;
                 } catch (Exception e) {
-                    System.out.println("Fail uploading ... " + filePath);
-                    e.printStackTrace();
+                    logger.debug("Fail uploading ... " + filePath);
+                    logger.error(null, e);
                     failFiles.put(zipFilePath, filePath);
                 }
             }
@@ -224,7 +230,7 @@ public class App {
         zis.closeEntry();
         zis.close();
         watch.stop();
-        System.err.println(count + "/" + total + "====>>> UNZIP Time Elapsed: [" + watch.getTime() + "ms] <<<==== " + countUploaded + "/" + countEntries + " files ");
+        logger.info(count + "/" + total + "====>>> UNZIP Time Elapsed: [" + watch.getTime() + "ms] <<<==== " + countUploaded + "/" + countEntries + " files ");
         failFiles.entrySet().stream().forEach(System.err::println);
     }
 
@@ -241,13 +247,14 @@ public class App {
 
             ftp.connect(hostnameTarget, 21);
             int reply = ftp.getReplyCode();
-            System.out.println("Reply ::: " + reply);
+            logger.debug("Reply ::: " + reply);
             if (!FTPReply.isPositiveCompletion(reply)) {
                 ftp.disconnect();
                 throw new Exception("Exception in connecting to FTP Server");
             }
             boolean logged = ftp.login(usernameTarget, passwordTarget);
             if (!logged) {
+
                 throw new Exception("Couldn't log ");
             }
             ftp.enterLocalPassiveMode();
@@ -260,14 +267,14 @@ public class App {
                 try {
                     insertFileToProcess(rsi.getPath());
                 } catch (SQLException e) {
-                    System.out.println("Error inserting file name");
+                    logger.debug("Error inserting file name");
                     e.printStackTrace();
                 }
             });*/
             int count[] = {0};
             long total = remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).count();
             remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
-                System.out.println("Downloading..." + rsi.getPath());
+                logger.debug("Downloading..." + rsi.getPath());
 
                 try {
                     sftpClient.get(rsi.getPath(), localTargetPath + rsi.getName());
@@ -275,15 +282,15 @@ public class App {
                     unzip(localTargetPath + rsi.getName(), ftp, ++count[0], total);
                     //insertProcessedFile(rsi.getPath());
                 } catch (IOException e) {
-                    System.out.println("Fail downloading: " + rsi.getPath());
-                    e.printStackTrace();
+                    logger.debug("Fail downloading: " + rsi.getPath());
+                    logger.error(null, e);
                 } catch (Exception e) {
-                    System.out.println("Fail downloading: " + rsi.getPath());
-                    e.printStackTrace();
+                    logger.debug("Fail downloading: " + rsi.getPath());
+                    logger.error(null, e);
                 }
             });
         } catch (Exception exc) {
-
+            logger.error(null, exc);
         } finally {
             sftpClient.close();
             sshClient.disconnect();
@@ -312,7 +319,7 @@ public class App {
             ftp.storeFile(remoteTargetPath + file.getName(), in);
             IOUtils.closeQuietly(in);
         } catch (Exception exc) {
-            exc.printStackTrace();
+            logger.error(null, exc);
         }
     }
 
