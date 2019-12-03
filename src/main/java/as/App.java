@@ -11,6 +11,10 @@ import org.apache.commons.net.ftp.FTP;
 import org.apache.commons.net.ftp.FTPClient;
 import org.apache.commons.net.ftp.FTPReply;
 
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.io.*;
 import java.sql.*;
 import java.util.*;
@@ -19,6 +23,8 @@ import java.util.zip.ZipInputStream;
 
 import org.slf4j.LoggerFactory;
 
+import javax.swing.*;
+import javax.swing.Timer;
 
 
 /**
@@ -83,7 +89,7 @@ public class App {
     public void setDbControlName(String dbControlName) {
         this.dbControlName = dbControlName;
     }
-    
+
 
     public static void main(String[] args) throws Exception {
         logger.info("Start app execution");
@@ -108,6 +114,7 @@ public class App {
         } catch (Exception exc) {
             logger.debug("Failure reading files from: " + app.fullPathToDownload);
             logger.error(null, exc);
+            app.showDialogError("Error processing files", "Error");
         }
 
         logger.info("End app execution");
@@ -239,9 +246,14 @@ public class App {
         final FTPClient ftp = new FTPClient();
         ftp.setDataTimeout(5000);
         ftp.setConnectTimeout(5000);
-
-        final SSHClient sshClient = setupSshj();
-        final SFTPClient sftpClient = sshClient.newSFTPClient();
+        SSHClient sshClient = null;
+        SFTPClient sftpClient = null;
+        try {
+            sshClient = setupSshj();
+            sftpClient = sshClient.newSFTPClient();
+        } catch (Exception exc) {
+            showDialogError("Couldn't reach the source sever", "Source connection error");
+        }
         //ftp.addProtocolCommandListener(new PrintCommandListener(new PrintWriter(new OutputStreamWriter(System.err, "UTF-8")), true));
         try {
 
@@ -261,8 +273,14 @@ public class App {
             ftp.setFileType(FTPClient.ASCII_FILE_TYPE);
             ftp.setFileTransferMode(FTP.COMPRESSED_TRANSFER_MODE);
             //
-            List<RemoteResourceInfo> remoteResourceInfos = sftpClient.ls(fileToDownload);
-
+            List<RemoteResourceInfo> remoteResourceInfos = new LinkedList<>();
+            try {
+                remoteResourceInfos = sftpClient.ls(fileToDownload);
+            } catch (Exception e) {
+                logger.error(null, e);
+                e.printStackTrace();
+                showDialogError("Couldn't read files from: " + fullPathToDownload, "Reading source error");
+            }
             /*remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
                 try {
                     insertFileToProcess(rsi.getPath());
@@ -272,12 +290,14 @@ public class App {
                 }
             });*/
             int count[] = {0};
+            final SFTPClient sftpClient_ = sftpClient;
             long total = remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).count();
+
             remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
                 logger.debug("Downloading..." + rsi.getPath());
 
                 try {
-                    sftpClient.get(rsi.getPath(), localTargetPath + rsi.getName());
+                    sftpClient_.get(rsi.getPath(), localTargetPath + rsi.getName());
 
                     unzip(localTargetPath + rsi.getName(), ftp, ++count[0], total);
                     //insertProcessedFile(rsi.getPath());
@@ -291,13 +311,46 @@ public class App {
             });
         } catch (Exception exc) {
             logger.error(null, exc);
+            showDialogError("Error processing files", "Error");
         } finally {
-            sftpClient.close();
-            sshClient.disconnect();
+            if (sftpClient != null) {
+                sftpClient.close();
+            }
+            if (sshClient != null) {
+                sshClient.disconnect();
+            }
             ftp.logout();
             ftp.disconnect();
         }
 
+    }
+
+    private void showDialogError(String message, String title) {
+        JOptionPane pane = new JOptionPane(message, JOptionPane.ERROR_MESSAGE);
+        JDialog dlg = pane.createDialog(message);
+        dlg.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dlg.addComponentListener(new ComponentAdapter() {
+            @Override
+            // =====================
+            public void componentShown(ComponentEvent e) {
+                // =====================
+                super.componentShown(e);
+                Timer t;
+                t = new Timer(1000, new ActionListener() {
+                    @Override
+                    // =====================
+                    public void actionPerformed(ActionEvent e) {
+                        // =====================
+                        dlg.setVisible(false);
+                    }
+                });
+                t.setRepeats(false);
+                t.start();
+            }
+        });
+        dlg.setVisible(true);
+        System.out.println("Finished");
+        dlg.dispose();
     }
 
     public void upload(String fullFilePath, String fileName) throws IOException {
