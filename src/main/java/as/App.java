@@ -1,6 +1,5 @@
 package as;
 
-import ch.qos.logback.core.ConsoleAppender;
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.sftp.RemoteResourceInfo;
 import net.schmizz.sshj.sftp.SFTPClient;
@@ -23,8 +22,9 @@ import java.util.zip.ZipInputStream;
 
 import org.slf4j.LoggerFactory;
 
-import javax.swing.*;
 import javax.swing.Timer;
+import javax.swing.JOptionPane;
+import javax.swing.JDialog;
 
 
 /**
@@ -42,6 +42,7 @@ public class App {
     String remoteTargetPath;
     String localFileName;
     String dbControlName;
+    boolean activemode = true;
     Map<String, String> failFiles = new HashMap<>();
 
     private static org.slf4j.Logger logger = LoggerFactory.getLogger(App.class);
@@ -108,17 +109,29 @@ public class App {
         app.setRemoteTargetPath(System.getProperty("remoteTargetPath"));
         app.setLocalFileName(System.getProperty("localFileName"));
         app.setDbControlName(System.getProperty("dbControlName"));
+        app.updateActivemode(System.getProperty("mode"));
+        logger.warn("Active Mode? {}", app.isActiveMode());
         app.createDB();
         try {
             app.downloadFile(app.fullPathToDownload, app.localFileName);
         } catch (Exception exc) {
             logger.debug("Failure reading files from: " + app.fullPathToDownload);
             logger.error(null, exc);
-            app.showDialogError("Error processing files", "Error");
+            app.showDialogError("Error procesando archivos", "Error");
         }
 
         logger.info("End app execution");
         System.exit(0);
+    }
+
+    private void updateActivemode(String mode) {
+        if ("passive".equalsIgnoreCase(mode) || "p".equalsIgnoreCase(mode)) {
+            logger.warn("Mode is passive");
+            setActivemode(false);
+        } else {
+            logger.warn("Mode is active");
+            setActivemode(true);
+        }
     }
 
     private void closeDbConn(Connection connection) {
@@ -174,9 +187,18 @@ public class App {
     }
 
     public void unzip(String zipFilePath, FTPClient ftp, int count, long total) throws IOException {
+        logger.warn("Begin unzip process for: {}", zipFilePath);
         String fileZip = zipFilePath;
         File destDir = new File(localTargetPath);
-        destDir.mkdirs();
+        try {
+            boolean res = destDir.mkdirs();
+            if (!res) {
+                logger.warn("dir {} not created", localTargetPath);
+            }
+        } catch (Exception exc) {
+            logger.error(null, exc);
+            logger.error("dir {} not created", localTargetPath);
+        }
         byte[] buffer = new byte[1024];
         ZipInputStream zis = new ZipInputStream(new FileInputStream(fileZip));
         ZipEntry zipEntry = zis.getNextEntry();
@@ -209,8 +231,9 @@ public class App {
             logger.debug("Sending priority type: " + s);
             for (String filePath : filePathsByType.get(s)) {
                 try {
-                    uploadFTP(filePath, ftp);
-                    countUploaded++;
+                    if (uploadFTP(filePath, ftp)) {
+                        countUploaded++;
+                    }
                 } catch (Exception exc) {
                     logger.debug("Fail uploading ... " + filePath);
                     logger.error(null, exc);
@@ -224,8 +247,9 @@ public class App {
         for (Map.Entry<String, List<String>> missing : filePathsByType.entrySet()) {
             for (String filePath : missing.getValue()) {
                 try {
-                    uploadFTP(filePath, ftp);
-                    countUploaded++;
+                    if (uploadFTP(filePath, ftp)) {
+                        countUploaded++;
+                    }
                 } catch (Exception e) {
                     logger.debug("Fail uploading ... " + filePath);
                     logger.error(null, e);
@@ -243,34 +267,65 @@ public class App {
 
     public void downloadFile(String fileToDownload, String fileName) throws Exception {
         //
-        final FTPClient ftp = new FTPClient();
-        ftp.setDataTimeout(5000);
-        ftp.setConnectTimeout(5000);
+
         SSHClient sshClient = null;
         SFTPClient sftpClient = null;
+
         try {
             sshClient = setupSshj();
             sftpClient = sshClient.newSFTPClient();
         } catch (Exception exc) {
-            showDialogError("Couldn't reach the source sever", "Source connection error");
+            showDialogError("No se pudo establecer conexión con el servidor sftp de origen: " + hostnameSource, "Error conexión");
+        }
+
+        final FTPClient ftp = new FTPClient();
+        ftp.setDataTimeout(50000);
+        ftp.setConnectTimeout(50000);
+
+        File destDir = new File(localTargetPath);
+        if (!destDir.exists()) {
+            try {
+                boolean res = destDir.mkdirs();
+                if (!res) {
+                    logger.warn("dir {} not created", localTargetPath);
+                } else {
+                    logger.warn("dir {} was created", localTargetPath);
+                }
+            } catch (Exception exc) {
+                logger.error(null, exc);
+                logger.error("dir {} not created", localTargetPath);
+            }
+        } else {
+            logger.warn("dir {} already exists!!", localTargetPath);
         }
         //ftp.addProtocolCommandListener(new PrintCommandListener(new PrintWriter(new OutputStreamWriter(System.err, "UTF-8")), true));
         try {
 
-            ftp.connect(hostnameTarget, 21);
+            try {
+                ftp.connect(hostnameTarget, 21);
+            } catch (Exception exc) {
+                logger.error(exc.getMessage(), exc);
+                showDialogError("Error de conexión al servidor ftp destino: " + hostnameTarget, "Error conexión destino");
+                throw new Exception("Exception in connecting to FTP Server");
+            }
             int reply = ftp.getReplyCode();
             logger.debug("Reply ::: " + reply);
             if (!FTPReply.isPositiveCompletion(reply)) {
                 ftp.disconnect();
+                showDialogError("Error de conexión al servidor ftp destino: " + hostnameTarget, "Error conexión destino");
                 throw new Exception("Exception in connecting to FTP Server");
             }
             boolean logged = ftp.login(usernameTarget, passwordTarget);
             if (!logged) {
-
+                showDialogError("Error de conexión al servidor ftp destino: " + hostnameTarget, "Error conexión destino");
                 throw new Exception("Couldn't log ");
             }
-            ftp.enterLocalPassiveMode();
-            ftp.setFileType(FTPClient.ASCII_FILE_TYPE);
+            if (this.isActiveMode()) {
+                ftp.enterLocalActiveMode();
+            } else {
+                ftp.enterLocalPassiveMode();
+            }
+            ftp.setFileType(FTPClient.BINARY_FILE_TYPE);
             ftp.setFileTransferMode(FTP.COMPRESSED_TRANSFER_MODE);
             //
             List<RemoteResourceInfo> remoteResourceInfos = new LinkedList<>();
@@ -279,7 +334,7 @@ public class App {
             } catch (Exception e) {
                 logger.error(null, e);
                 e.printStackTrace();
-                showDialogError("Couldn't read files from: " + fullPathToDownload, "Reading source error");
+                showDialogError("No se pueden leer archivos del servidor de origen en la ruta: " + fullPathToDownload, "Reading source error");
             }
             /*remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
                 try {
@@ -293,8 +348,9 @@ public class App {
             final SFTPClient sftpClient_ = sftpClient;
             long total = remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).count();
 
+            logger.warn("Total to download: {}", total);
             remoteResourceInfos.stream().filter((s) -> s.getName().contains(".zip")).forEach(rsi -> {
-                logger.debug("Downloading..." + rsi.getPath());
+                logger.warn("Downloading... {}", rsi.getPath());
 
                 try {
                     sftpClient_.get(rsi.getPath(), localTargetPath + rsi.getName());
@@ -302,10 +358,10 @@ public class App {
                     unzip(localTargetPath + rsi.getName(), ftp, ++count[0], total);
                     //insertProcessedFile(rsi.getPath());
                 } catch (IOException e) {
-                    logger.debug("Fail downloading: " + rsi.getPath());
+                    logger.error("Fail downloading: " + rsi.getPath());
                     logger.error(null, e);
                 } catch (Exception e) {
-                    logger.debug("Fail downloading: " + rsi.getPath());
+                    logger.error("Fail downloading: " + rsi.getPath());
                     logger.error(null, e);
                 }
             });
@@ -319,10 +375,16 @@ public class App {
             if (sshClient != null) {
                 sshClient.disconnect();
             }
-            ftp.logout();
-            ftp.disconnect();
+            if (ftp.isConnected()) {
+                ftp.logout();
+                ftp.disconnect();
+            }
         }
 
+    }
+
+    private boolean isActiveMode() {
+        return activemode;
     }
 
     private void showDialogError(String message, String title) {
@@ -336,7 +398,7 @@ public class App {
                 // =====================
                 super.componentShown(e);
                 Timer t;
-                t = new Timer(1000, new ActionListener() {
+                t = new Timer(5000, new ActionListener() {
                     @Override
                     // =====================
                     public void actionPerformed(ActionEvent e) {
@@ -363,16 +425,18 @@ public class App {
         sshClient.disconnect();
     }
 
-    public void uploadFTP(String fullFilePath, FTPClient ftp) throws Exception {
-
+    public boolean uploadFTP(String fullFilePath, FTPClient ftp) throws Exception {
 
         File file = new File(fullFilePath);
         InputStream in = new FileInputStream(file);
         try {
             ftp.storeFile(remoteTargetPath + file.getName(), in);
             IOUtils.closeQuietly(in);
+            return true;
         } catch (Exception exc) {
+            logger.warn("Fallo subiendo archivo: " + fullFilePath);
             logger.error(null, exc);
+            return false;
         }
     }
 
@@ -383,5 +447,9 @@ public class App {
         client.connect(hostnameSource);
         client.authPassword(usernameSource, passwordSource);
         return client;
+    }
+
+    public void setActivemode(boolean activemode) {
+        this.activemode = activemode;
     }
 }
